@@ -731,6 +731,18 @@ public class FurnitureTable extends JTable implements View, Printable {
     // with printable renderers for each column
     DefaultTableColumnModel printableColumnModel = new DefaultTableColumnModel();
     TableColumnModel columnModel = getColumnModel();
+    List<TableColumn> printableColumns = new ArrayList<TableColumn>();
+    boolean levelColumnIncluded = false;
+    int numCols = columnModel.getColumnCount();
+    for (int columnIndex = 0; columnIndex < numCols; columnIndex++) {
+      TableColumn tableColumn = columnModel.getColumn(columnIndex);
+      printableColumns.add(tableColumn);
+      levelColumnIncluded |= tableColumn.getIdentifier() == HomePieceOfFurniture.SortableProperty.LEVEL;
+    }
+    if (!levelColumnIncluded) {
+      printableColumns.add(((FurnitureTableColumnModel)columnModel)
+          .getAvailableColumn(HomePieceOfFurniture.SortableProperty.LEVEL));
+    }
     final DefaultTableCellRenderer defaultRenderer = new DefaultTableCellRenderer();
     defaultRenderer.setHorizontalAlignment(DefaultTableCellRenderer.CENTER);
     TableCellRenderer printableHeaderRenderer = new TableCellRenderer() {
@@ -750,19 +762,37 @@ public class FurnitureTable extends JTable implements View, Printable {
           return headerRendererLabel;
         }
       };
-    for (int columnIndex = 0, n = columnModel.getColumnCount(); columnIndex < n; columnIndex++) {
-      final TableColumn tableColumn = columnModel.getColumn(columnIndex);
+    for (final TableColumn tableColumn : printableColumns) {
       // Create a printable column from existing table column
       TableColumn printableColumn = new TableColumn();
       printableColumn.setIdentifier(tableColumn.getIdentifier());
       printableColumn.setHeaderValue(tableColumn.getHeaderValue());
       TableCellRenderer printableCellRenderer = new TableCellRenderer() {
+          private final DefaultTableCellRenderer nameRenderer = new DefaultTableCellRenderer();
+
           public Component getTableCellRendererComponent(JTable table, Object value, 
                                  boolean isSelected, boolean hasFocus, int row, int column) {
-            // Delegate rendering to existing cell renderer 
-            TableCellRenderer cellRenderer = tableColumn.getCellRenderer();
-            Component rendererComponent = cellRenderer.getTableCellRendererComponent(table, value, 
-                isSelected, hasFocus, row, column);
+            Component rendererComponent;
+            if (tableColumn.getIdentifier() == HomePieceOfFurniture.SortableProperty.NAME) {
+              HomePieceOfFurniture piece = (HomePieceOfFurniture)value;
+              rendererComponent = this.nameRenderer.getTableCellRendererComponent(table,
+                  piece != null ? piece.getName() : null, false, false, row, column);
+              if (piece != null) {
+                Content iconContent = piece instanceof HomeFurnitureGroup
+                    ? TreeTableNameCellRenderer.GROUP_ICON_CONTENT : piece.getIcon();
+                this.nameRenderer.setIcon(IconManager.getInstance().getIcon(iconContent,
+                    table.getRowHeight() - table.getRowMargin(), table));
+              } else {
+                this.nameRenderer.setIcon(null);
+              }
+              this.nameRenderer.setBorder(BorderFactory.createEmptyBorder(
+                  0, Math.max(0, FurnitureTable.this.getFurnitureDepth(piece)) * 12, 0, 0));
+            } else {
+              // Delegate rendering to existing cell renderer
+              TableCellRenderer cellRenderer = tableColumn.getCellRenderer();
+              rendererComponent = cellRenderer.getTableCellRendererComponent(table, value,
+                  isSelected, hasFocus, row, column);
+            }
             if (rendererComponent instanceof JCheckBox) {
               // Prefer a x sign for boolean values instead of check boxes
               rendererComponent = defaultRenderer.getTableCellRendererComponent(table, 
@@ -782,6 +812,28 @@ public class FurnitureTable extends JTable implements View, Printable {
     return print(g, pageFormat, pageIndex, printableColumnModel, Color.BLACK);
   }
 
+  private int getFurnitureDepth(HomePieceOfFurniture piece) {
+    return getFurnitureDepth(((FurnitureTreeTableModel)getModel()).home.getFurniture(), piece, 0);
+  }
+
+  private int getFurnitureDepth(List<HomePieceOfFurniture> furniture,
+                                HomePieceOfFurniture piece, int depth) {
+    if (piece != null) {
+      for (HomePieceOfFurniture candidate : furniture) {
+        if (candidate == piece) {
+          return depth;
+        } else if (candidate instanceof HomeFurnitureGroup) {
+          int childDepth = getFurnitureDepth(
+              ((HomeFurnitureGroup)candidate).getFurniture(), piece, depth + 1);
+          if (childDepth >= 0) {
+            return childDepth;
+          }
+        }
+      }
+    }
+    return -1;
+  }
+
   /**
    * Prints this table in Event Dispatch Thread.
   */
@@ -793,20 +845,22 @@ public class FurnitureTable extends JTable implements View, Printable {
     if (EventQueue.isDispatchThread()) {
       TableColumnModel oldColumnModel = getColumnModel();
       Color oldGridColor = getGridColor();
-      setColumnModel(printableColumnModel);   
-      if (OperatingSystem.isWindows()) {
-        // Add 3 pixels to columns to get a correct rendering
-        updateTableColumnsWidth(3);
-      } else {
-        updateTableColumnsWidth(0);
+      try {
+        setColumnModel(printableColumnModel);
+        if (OperatingSystem.isWindows()) {
+          // Add 3 pixels to columns to get a correct rendering
+          updateTableColumnsWidth(3);
+        } else {
+          updateTableColumnsWidth(0);
+        }
+        setGridColor(gridColor);
+        Printable printable = getPrintable(PrintMode.FIT_WIDTH, null, null);
+        return printable.print(g, pageFormat, pageIndex);
+      } finally {
+        // Restore column model and grid color to their previous values
+        setColumnModel(oldColumnModel);
+        setGridColor(oldGridColor);
       }
-      setGridColor(gridColor);
-      Printable printable = getPrintable(PrintMode.FIT_WIDTH, null, null);
-      int pageExists = printable.print(g, pageFormat, pageIndex);
-      // Restore column model and grid color to their previous values
-      setColumnModel(oldColumnModel);
-      setGridColor(oldGridColor);
-      return pageExists;
     } else {
       // Print synchronously table in Event Dispatch Thread
       // The best solution should be to be able to print out of Event Dispatch Thread
@@ -1015,6 +1069,10 @@ public class FurnitureTable extends JTable implements View, Printable {
       addHomeListener(home);
       addLanguageListener(preferences);
       updateModelColumns(home.getFurnitureVisibleProperties());
+    }
+
+    public TableColumn getAvailableColumn(HomePieceOfFurniture.SortableProperty property) {
+      return this.availableColumns.get(property);
     }
 
     /**
